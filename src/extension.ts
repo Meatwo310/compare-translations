@@ -105,22 +105,24 @@ class GroupDecorationManager {
 		}
 
 		const groups = collectGroups(editor.document);
-		const decorations: vscode.DecorationOptions[] = groups.map(g => {
-			const line = editor.document.lineAt(g.startLine);
-			// 行末の範囲（0文字）に after デコレーションを付与する
-			const range = new vscode.Range(line.range.end, line.range.end);
-			const entriesLabel = g.count === 1 ? '1 entry' : `${g.count} entries`;
-			return {
-				range,
-				renderOptions: {
-					after: {
-						contentText: ` [${entriesLabel}]\n`,
-						color: new vscode.ThemeColor('editorLineNumber.foreground'),
-						fontStyle: 'italic',
+		const decorations: vscode.DecorationOptions[] = groups
+			.filter(g => g.count > 1)
+			.map(g => {
+				const line = editor.document.lineAt(g.startLine);
+				// 行末の範囲（0文字）に after デコレーションを付与する
+				const range = new vscode.Range(line.range.end, line.range.end);
+				const entriesLabel = `${g.count} entries`;
+				return {
+					range,
+					renderOptions: {
+						after: {
+							contentText: ` [${entriesLabel}]\n`,
+							color: new vscode.ThemeColor('editorLineNumber.foreground'),
+							fontStyle: 'italic',
+						},
 					},
-				},
-			};
-		});
+				};
+			});
 
 		editor.setDecorations(this.decorationType, decorations);
 	}
