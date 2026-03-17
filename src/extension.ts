@@ -18,63 +18,152 @@ function extractPrefix(line: string): string | null {
 	return key.substring(0, dotIndex);
 }
 
+/** グループの情報（先頭行・件数） */
+interface Group {
+	prefix: string;
+	startLine: number;
+	count: number;
+}
+
+/**
+ * ドキュメント全体を走査し、同一プレフィックスが連続する行をグループとして返す。
+ * 件数が1のグループ（折りたたみ不要）も含む。
+ */
+function collectGroups(document: vscode.TextDocument): Group[] {
+	const groups: Group[] = [];
+
+	let groupStart: number | null = null;
+	let groupPrefix: string | null = null;
+	let groupCount = 0;
+
+	const pushGroup = (endLine: number) => {
+		if (groupStart !== null && groupPrefix !== null && groupCount >= 1) {
+			groups.push({ prefix: groupPrefix, startLine: groupStart, count: groupCount });
+		}
+	};
+
+	for (let i = 0; i < document.lineCount; i++) {
+		const lineText = document.lineAt(i).text;
+		const prefix = extractPrefix(lineText);
+
+		if (prefix !== null && prefix === groupPrefix) {
+			groupCount++;
+			continue;
+		}
+
+		// プレフィックスが変わった -> 前のグループを確定
+		pushGroup(i - 1);
+
+		if (prefix !== null) {
+			groupStart = i;
+			groupPrefix = prefix;
+			groupCount = 1;
+		} else {
+			groupStart = null;
+			groupPrefix = null;
+			groupCount = 0;
+		}
+	}
+
+	// ファイル末尾で未確定のグループを確定
+	pushGroup(document.lineCount - 1);
+
+	return groups;
+}
+
 class TranslationFoldingRangeProvider implements vscode.FoldingRangeProvider {
 	provideFoldingRanges(
 		document: vscode.TextDocument,
 		_context: vscode.FoldingContext,
 		_token: vscode.CancellationToken
 	): vscode.FoldingRange[] {
-		const ranges: vscode.FoldingRange[] = [];
+		const groups = collectGroups(document);
+		return groups
+			.filter(g => g.count > 1)
+			.map(g => new vscode.FoldingRange(g.startLine, g.startLine + g.count - 1));
+	}
+}
 
-		let groupStart: number | null = null;
-		let groupPrefix: string | null = null;
+/**
+ * グループのデコレーションを管理するクラス。
+ * グループ先頭行の before に `<prefix> [N entries]` を表示する。
+ * contentText 末尾の "\n" で後続行との間に改行を挿入する。
+ */
+class GroupDecorationManager {
+	private readonly decorationType: vscode.TextEditorDecorationType;
 
-		for (let i = 0; i < document.lineCount; i++) {
-			const lineText = document.lineAt(i).text;
-			const prefix = extractPrefix(lineText);
+	constructor() {
+		// スタイルは個別デコレーションの renderOptions で指定するため、
+		// ここでは before を定義せずシンプルに生成する
+		this.decorationType = vscode.window.createTextEditorDecorationType({});
+	}
 
-			if (prefix !== null && prefix === groupPrefix) {
-				// 同じプレフィックスが続いている -> グループを延長
-				continue;
-			}
-
-			// プレフィックスが変わった（または null になった）-> 前のグループを確定
-			if (groupStart !== null && groupPrefix !== null) {
-				const groupEnd = i - 1;
-				if (groupEnd > groupStart) {
-					ranges.push(new vscode.FoldingRange(groupStart, groupEnd));
-				}
-			}
-
-			// 新しいグループを開始（ドット付きキーの場合のみ）
-			if (prefix !== null) {
-				groupStart = i;
-				groupPrefix = prefix;
-			} else {
-				groupStart = null;
-				groupPrefix = null;
-			}
+	updateDecorations(editor: vscode.TextEditor): void {
+		if (editor.document.languageId !== 'json') {
+			editor.setDecorations(this.decorationType, []);
+			return;
 		}
 
-		// ファイル末尾で未確定のグループを確定
-		if (groupStart !== null && groupPrefix !== null) {
-			const groupEnd = document.lineCount - 1;
-			if (groupEnd > groupStart) {
-				ranges.push(new vscode.FoldingRange(groupStart, groupEnd));
-			}
-		}
+		const groups = collectGroups(editor.document);
+		const decorations: vscode.DecorationOptions[] = groups.map(g => {
+			const line = editor.document.lineAt(g.startLine);
+			// 行頭の範囲（0文字）に before デコレーションを付与する
+			const range = new vscode.Range(line.range.start, line.range.start);
+			const entriesLabel = g.count === 1 ? '1 entry' : `${g.count} entries`;
+			return {
+				range,
+				renderOptions: {
+					before: {
+						contentText: `${g.prefix} [${entriesLabel}]\n`,
+						color: new vscode.ThemeColor('editorLineNumber.foreground'),
+						fontStyle: 'italic',
+					},
+				},
+			};
+		});
 
-		return ranges;
+		editor.setDecorations(this.decorationType, decorations);
+	}
+
+	dispose(): void {
+		this.decorationType.dispose();
 	}
 }
 
 export function activate(context: vscode.ExtensionContext) {
-	const provider = new TranslationFoldingRangeProvider();
-	const disposable = vscode.languages.registerFoldingRangeProvider(
-		{ language: 'json' },
-		provider
+	// Folding
+	const foldingProvider = new TranslationFoldingRangeProvider();
+	context.subscriptions.push(
+		vscode.languages.registerFoldingRangeProvider({ language: 'json' }, foldingProvider)
 	);
-	context.subscriptions.push(disposable);
+
+	// Decorations
+	const decorationManager = new GroupDecorationManager();
+	context.subscriptions.push({ dispose: () => decorationManager.dispose() });
+
+	// アクティブエディタが切り替わったときに更新
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor(editor => {
+			if (editor) {
+				decorationManager.updateDecorations(editor);
+			}
+		})
+	);
+
+	// ドキュメントが編集されたときに更新
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeTextDocument(event => {
+			const editor = vscode.window.activeTextEditor;
+			if (editor && editor.document === event.document) {
+				decorationManager.updateDecorations(editor);
+			}
+		})
+	);
+
+	// 起動時点でアクティブなエディタにも適用
+	if (vscode.window.activeTextEditor) {
+		decorationManager.updateDecorations(vscode.window.activeTextEditor);
+	}
 }
 
 export function deactivate() {}
