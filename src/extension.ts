@@ -84,51 +84,56 @@ class TranslationFoldingRangeProvider implements vscode.FoldingRangeProvider {
 	}
 }
 
-/**
- * グループのデコレーションを管理するクラス。
- * グループ先頭行の after に `[N entries]` を表示する。
- * contentText 末尾の "\n" で後続行との間に改行を挿入する。
- */
-class GroupDecorationManager {
-	private readonly decorationType: vscode.TextEditorDecorationType;
+const FOLD_GROUP_COMMAND = 'translation-tree.foldGroup';
 
-	constructor() {
-		// スタイルは個別デコレーションの renderOptions で指定するため、
-		// ここでは after を定義せずシンプルに生成する
-		this.decorationType = vscode.window.createTextEditorDecorationType({});
+/**
+ * Code Lens プロバイダ。
+ * 各グループの startLine に、同じ行を起点とする全グループを深さ順に並べた
+ * Code Lens を登録する。クリックすると対象グループの範囲を折りたたむ。
+ *
+ * 同一 startLine に複数グループが存在する場合（親子の重複）は、
+ * プレフィックスのドット数（= 深さ）昇順でそれぞれ独立した CodeLens として返す。
+ */
+class TranslationCodeLensProvider implements vscode.CodeLensProvider {
+	private readonly _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
+	readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
+
+	refresh(): void {
+		this._onDidChangeCodeLenses.fire();
 	}
 
-	updateDecorations(editor: vscode.TextEditor): void {
-		if (editor.document.languageId !== 'json') {
-			editor.setDecorations(this.decorationType, []);
-			return;
+	provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+		if (document.languageId !== 'json') {
+			return [];
 		}
 
-		const groups = collectGroups(editor.document);
-		const decorations: vscode.DecorationOptions[] = groups
-			.filter(g => g.count > 1)
-			.map(g => {
-				const line = editor.document.lineAt(g.startLine);
-				// 行末の範囲（0文字）に after デコレーションを付与する
-				const range = new vscode.Range(line.range.end, line.range.end);
-				const entriesLabel = `${g.count} entries`;
-				return {
-					range,
-					renderOptions: {
-						after: {
-							contentText: ` [${entriesLabel}]\n`,
-							color: new vscode.ThemeColor('editorLineNumber.foreground'),
-							fontStyle: 'italic',
-						},
-					},
-				};
-			});
+		const groups = collectGroups(document).filter(g => g.count > 1);
 
-		editor.setDecorations(this.decorationType, decorations);
-	}
+		// startLine でグループ化し、深さ（ドット数）昇順にソート
+		const byLine = new Map<number, Group[]>();
+		for (const g of groups) {
+			const list = byLine.get(g.startLine) ?? [];
+			list.push(g);
+			byLine.set(g.startLine, list);
+		}
 
-	dispose(): void {
-		this.decorationType.dispose();
+		const lenses: vscode.CodeLens[] = [];
+		for (const [startLine, lineGroups] of byLine) {
+			lineGroups.sort((a, b) =>
+				a.prefix.split('.').length - b.prefix.split('.').length
+			);
+
+			const range = new vscode.Range(startLine, 0, startLine, 0);
+			for (const g of lineGroups) {
+				lenses.push(new vscode.CodeLens(range, {
+					title: `▾ ${g.prefix} [${g.count}]`,
+					command: FOLD_GROUP_COMMAND,
+					arguments: [g.startLine, g.startLine + g.count - 1],
+				}));
+			}
+		}
+
+		return lenses;
 	}
 }
 
@@ -139,33 +144,36 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.languages.registerFoldingRangeProvider({ language: 'json' }, foldingProvider)
 	);
 
-	// Decorations
-	const decorationManager = new GroupDecorationManager();
-	context.subscriptions.push({ dispose: () => decorationManager.dispose() });
-
-	// アクティブエディタが切り替わったときに更新
+	// Code Lens
+	const codeLensProvider = new TranslationCodeLensProvider();
 	context.subscriptions.push(
-		vscode.window.onDidChangeActiveTextEditor(editor => {
-			if (editor) {
-				decorationManager.updateDecorations(editor);
-			}
-		})
+		vscode.languages.registerCodeLensProvider({ language: 'json' }, codeLensProvider)
 	);
 
-	// ドキュメントが編集されたときに更新
+	// ドキュメントが編集されたときに Code Lens を更新
 	context.subscriptions.push(
-		vscode.workspace.onDidChangeTextDocument(event => {
-			const editor = vscode.window.activeTextEditor;
-			if (editor && editor.document === event.document) {
-				decorationManager.updateDecorations(editor);
-			}
-		})
+		vscode.workspace.onDidChangeTextDocument(() => codeLensProvider.refresh())
 	);
 
-	// 起動時点でアクティブなエディタにも適用
-	if (vscode.window.activeTextEditor) {
-		decorationManager.updateDecorations(vscode.window.activeTextEditor);
-	}
+	// foldGroup コマンド: startLine を含む折りたたみ範囲を折りたたむ。
+	// editor.fold は selectionLines のカーソル行を起点に FoldingRangeProvider の
+	// 範囲を選んで折りたたむため、まずカーソルを startLine へ移動してから実行する。
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			FOLD_GROUP_COMMAND,
+			(startLine: number, _endLine: number) => {
+				const editor = vscode.window.activeTextEditor;
+				if (!editor) {
+					return;
+				}
+				const pos = new vscode.Position(startLine, 0);
+				editor.selection = new vscode.Selection(pos, pos);
+				vscode.commands.executeCommand('editor.fold', {
+					selectionLines: [startLine],
+				});
+			}
+		)
+	);
 }
 
 export function deactivate() {}
