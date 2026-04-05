@@ -1,6 +1,6 @@
-# translation-tree README
+# compare-translations README
 
-This is the README for your extension "translation-tree". After writing up a brief description, we recommend including the following sections.
+This is the README for your extension "compare-translations". After writing up a brief description, we recommend including the following sections.
 
 ## Features
 

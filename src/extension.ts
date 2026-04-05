@@ -74,7 +74,7 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('translation-tree.setAsOriginal', (uri: vscode.Uri) => {
+		vscode.commands.registerCommand('compare-translations.setAsOriginal', (uri: vscode.Uri) => {
 			originalFilePath = uri.fsPath;
 			context.workspaceState.update('originalTranslationFile', originalFilePath);
 

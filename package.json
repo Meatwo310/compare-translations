@@ -1,6 +1,6 @@
 {
-  "name": "translation-tree",
-  "displayName": "translation-tree",
+  "name": "compare-translations",
+  "displayName": "compare-translations",
   "description": "",
   "version": "0.0.1",
   "engines": {
@@ -17,16 +17,16 @@
   "contributes": {
     "commands": [
       {
-        "command": "translation-tree.setAsOriginal",
+        "command": "compare-translations.setAsOriginal",
         "title": "%command.setAsOriginal.title%"
       }
     ],
     "menus": {
       "explorer/context": [
         {
-          "command": "translation-tree.setAsOriginal",
+          "command": "compare-translations.setAsOriginal",
           "when": "resourceExtname == .json",
-          "group": "translation-tree"
+          "group": "compare-translations"
         }
       ]
     }
