@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const LOCALE_FILE_PATTERN = /^[a-z]{2}_[a-z]{2}\.json$/i;
-const EN_US_FILENAME = 'en_us.json';
 
 const decorationType = vscode.window.createTextEditorDecorationType({
 	after: {
@@ -13,25 +12,29 @@ const decorationType = vscode.window.createTextEditorDecorationType({
 	},
 });
 
+let originalFilePath: string | undefined;
+
 function updateDecorations(editor: vscode.TextEditor): void {
 	const fileName = path.basename(editor.document.fileName);
 
-	if (!LOCALE_FILE_PATTERN.test(fileName) || fileName.toLowerCase() === EN_US_FILENAME) {
+	if (!LOCALE_FILE_PATTERN.test(fileName) || !originalFilePath) {
 		editor.setDecorations(decorationType, []);
 		return;
 	}
 
-	const dir = path.dirname(editor.document.fileName);
-	const enUsPath = path.join(dir, EN_US_FILENAME);
-
-	if (!fs.existsSync(enUsPath)) {
+	if (editor.document.fileName === originalFilePath) {
 		editor.setDecorations(decorationType, []);
 		return;
 	}
 
-	let enUsData: Record<string, unknown>;
+	if (!fs.existsSync(originalFilePath)) {
+		editor.setDecorations(decorationType, []);
+		return;
+	}
+
+	let originalData: Record<string, unknown>;
 	try {
-		enUsData = JSON.parse(fs.readFileSync(enUsPath, 'utf8'));
+		originalData = JSON.parse(fs.readFileSync(originalFilePath, 'utf8'));
 	} catch {
 		editor.setDecorations(decorationType, []);
 		return;
@@ -48,13 +51,13 @@ function updateDecorations(editor: vscode.TextEditor): void {
 		}
 
 		const key = JSON.parse(`"${match[1]}"`);
-		const enValue = enUsData[key];
+		const originalValue = originalData[key];
 
-		if (typeof enValue === 'string') {
+		if (typeof originalValue === 'string') {
 			decorations.push({
 				range: line.range,
 				renderOptions: {
-					after: { contentText: enValue },
+					after: { contentText: originalValue },
 				},
 			});
 		}
@@ -64,11 +67,26 @@ function updateDecorations(editor: vscode.TextEditor): void {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+	originalFilePath = context.workspaceState.get<string>('originalTranslationFile');
+
 	if (vscode.window.activeTextEditor) {
 		updateDecorations(vscode.window.activeTextEditor);
 	}
 
 	context.subscriptions.push(
+		vscode.commands.registerCommand('translation-tree.setAsOriginal', (uri: vscode.Uri) => {
+			originalFilePath = uri.fsPath;
+			context.workspaceState.update('originalTranslationFile', originalFilePath);
+
+			const editor = vscode.window.activeTextEditor;
+			if (editor) {
+				updateDecorations(editor);
+			}
+
+			vscode.window.showInformationMessage(
+				`翻訳の比較対象を設定しました: ${path.basename(originalFilePath)}`
+			);
+		}),
 		vscode.window.onDidChangeActiveTextEditor(editor => {
 			if (editor) {
 				updateDecorations(editor);

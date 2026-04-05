@@ -16,10 +16,19 @@
   "contributes": {
     "commands": [
       {
-        "command": "translation-tree.helloWorld",
-        "title": "Hello World"
+        "command": "translation-tree.setAsOriginal",
+        "title": "翻訳の比較対象として設定"
       }
-    ]
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "translation-tree.setAsOriginal",
+          "when": "resourceExtname == .json",
+          "group": "translation-tree"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "pnpm run compile",
